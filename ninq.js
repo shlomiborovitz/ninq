@@ -111,6 +111,69 @@ function* groupJoinCmp(outer, inner, outerKeySelector, innerKeySelector, resultS
 		yield resultSelector(item, matchedInnerItems);
 	}
 }
+function* intersectEq(left, right) {
+	let rightItems = new Set(right);
+	for (let item in left) {
+		if (rightItems.has(item)) {
+			yield item;
+		}
+	}
+}
+function* intersectCmp(left, right, comparer) {
+	for (let item of left) {
+		if (right.contains(item, comparer)) {
+			yield item;
+		}
+	}
+}
+function* joinEq(outer, inner, outerKeySelector, innerKeySelector, resultSelector) {
+	let innerByKey = inner.toLookup(innerKeySelector);
+	for (let outerItem of outer) {
+		let key = outerKeySelector(outerItem);
+		if (innerByKey.has(key)) {
+			let innerItems = innerByKey.get(key);
+			for (let innerItem of innerItems) {
+				yield resultIterator(outerItem, innerItem);
+			}
+		}
+	}
+}
+function* joinCmp(outer, inner, outerKeySelector, innerKeySelector, resultSelector, comparer) {
+	let previousKeys = [];
+	let innerByKey = inner.aggregate((map, innerItem) => {
+		let key = innerKeySelector(innerItem);
+		let prevKeysQuery = l(previousKeys);
+		if (prevKeysQuery.any(prevKey => comparer(prevKey, key))) {
+			key = prevKeysQuery.first(prevKey => comparer(prevKey, key));
+		}
+		if (map.has(key)) {
+			map.get(key).push(innerItem);
+		}
+		else {
+			map.set(key, [innerItem]);
+			previousKeys.push(key);
+		}
+		return map;
+	}, new Map());
+	for (let outerItem of outer) {
+		let outerKey = outerKeySelector(outerItem);
+		for (let key of innerByKey.keys()) {
+			if (comparer(outerKey, key)) {
+				for (let innerItem of innerByKey.get(key)) {
+					yield resultSelector(outerItem, innerItem);
+				}
+				break;
+			}
+		}
+	}
+}
+function last(source, predicate) {
+	let result = NO_ELEMENT;
+	for (let item of source.where(predicate)) {
+		result = item;
+	}
+	return result;
+}
 
 class Enumerable {
 	constructor(iteratee, iterator) {
@@ -261,18 +324,47 @@ class Enumerable {
 	}
 	groupJoin(inner, outerKeySelector, innerKeySelector, resultSelector, comparer) {
 		let resultIterator = typeof comparer === 'function'
-		? groupJoinCmp
-		:groupJoinEq;
+			? groupJoinCmp
+			: groupJoinEq;
 		return new Enumerable(
-			this, 
+			this,
 			resultIterator.bind(
-				null, 
-				this, 
-				inner, 
-				outerKeySelector, 
+				null,
+				this,
+				inner,
+				outerKeySelector,
 				innerKeySelector,
-				resultSelector, 
+				resultSelector,
 				comparer));
+	}
+	intersect(other, comparer) {
+		return new Enumerable(
+			this,
+			typeof comparer === 'function'
+				? intersectCmp(this, other, comparer)
+				: intersectEq(this, other));
+	}
+	join(inner, outerKeySelector, innerKeySelector, resultSelector, comparer) {
+		return new Enumerable(
+			this,
+			typeof comparer === 'function'
+				? joinCmp(this, inner, outerKeySelector, innerKeySelector, resultSelector, comparer)
+				: joinEq(this, inner, outerKeySelector, innerKeySelector, resultSelector)
+		);
+	}
+	last(predicate) {
+		let result = last(this, predicate);
+		if (result === NO_ELEMENT) {
+			throw new Error('no elements in source');
+		}
+		return result;
+	}
+	lastOrDefault(predicate, defaultValue) {
+		let result = last(this, predicate);
+		if (result === NO_ELEMENT) {
+			result = defaultValue;
+		}
+		return result;
 	}
 	static empty() {
 		return new Enumerable(empty());
